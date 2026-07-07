@@ -4,3 +4,5 @@ obj/
 config.json
 provisioning-log.csv
 .vs/
+publish/
+.DS_Store
