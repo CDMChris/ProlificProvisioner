@@ -1,0 +1,6 @@
+bin/
+obj/
+*.user
+config.json
+provisioning-log.csv
+.vs/

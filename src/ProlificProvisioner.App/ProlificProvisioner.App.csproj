@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    net8.0-windows + UseWPF only builds on Windows (no WPF workload on macOS/Linux SDKs).
+    This project intentionally cannot be compiled on the dev Mac; see README for the
+    Windows build/run instructions and the Core-only `dotnet test` path used during
+    day-to-day development.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>ProlificProvisioner</AssemblyName>
+    <RootNamespace>ProlificProvisioner.App</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProlificProvisioner.Core\ProlificProvisioner.Core.csproj" />
+  </ItemGroup>
+
+</Project>
