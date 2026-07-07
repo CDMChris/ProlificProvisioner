@@ -8,9 +8,9 @@ public sealed class AppConfig
     /// <summary>Physical USB location path (from NativeDeviceLocation) -> fixture role. Populated by Learn Ports.</summary>
     public Dictionary<string, PortRole> PortLocationMap { get; set; } = new();
 
-    public string DispenseHeadRollbackDriverInfPath { get; set; } = "Drivers/DispenseHead-Rollback/prolific.inf";
+    public string DispenseHeadRollbackDriverInfPath { get; set; } = "Drivers/DispenseHead-Rollback/plser_1.inf";
 
-    public string PrinterLatestDriverInfPath { get; set; } = "Drivers/Printer-2026/prolific.inf";
+    public string PrinterLatestDriverInfPath { get; set; } = "Drivers/Printer-2026/plser_1.inf";
 
     public TimeSpan DeviceDetectTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
