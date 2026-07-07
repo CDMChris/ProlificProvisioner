@@ -24,20 +24,17 @@ Drivers/                        # bundled driver packages the app installs from
 
 ## Building
 
-The whole solution — including the WPF app — compiles on macOS/Linux dev machines
-via the cross-targeting flag:
-
-```
-dotnet build -p:EnableWindowsTargeting=true
-```
-
-This validates C# and XAML compile correctly, but does **not** prove the app runs
-correctly — `pnputil`, the registry writes, and WMI device enumeration all only
-function on Windows. On a normal Windows dev box you don't need the flag:
+The whole solution — including the WPF app — compiles with a plain:
 
 ```
 dotnet build
 ```
+
+on Windows, macOS, or Linux (the App project auto-enables cross-targeting when
+not on Windows, so no extra flags needed). On non-Windows this validates that
+the C# and XAML compile correctly, but does **not** prove the app runs
+correctly — `pnputil`, the registry writes, and WMI device enumeration all only
+function when actually run on Windows.
 
 Run the Core unit tests (portable, no real hardware needed) on any platform:
 

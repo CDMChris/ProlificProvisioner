@@ -1,11 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!--
-    net8.0-windows + UseWPF only builds on Windows (no WPF workload on macOS/Linux SDKs).
-    This project intentionally cannot be compiled on the dev Mac; see README for the
-    Windows build/run instructions and the Core-only `dotnet test` path used during
-    day-to-day development.
-  -->
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <OutputType>WinExe</OutputType>
@@ -15,6 +9,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>ProlificProvisioner</AssemblyName>
     <RootNamespace>ProlificProvisioner.App</RootNamespace>
+    <!--
+      Lets this net8.0-windows project compile on non-Windows dev machines (no WPF
+      workload there), so `dotnet build` works out of the box on macOS/Linux too.
+      This only validates C#/XAML compilation — pnputil, registry, and WMI calls
+      still only function when actually run on Windows.
+    -->
+    <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
