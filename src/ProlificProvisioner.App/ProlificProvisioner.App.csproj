@@ -22,4 +22,17 @@
     <ProjectReference Include="..\ProlificProvisioner.Core\ProlificProvisioner.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Config.DispenseHeadRollbackDriverInfPath / PrinterLatestDriverInfPath resolve
+      relative to AppContext.BaseDirectory (see App.xaml.cs), so the bundled driver
+      packages need to land next to the exe on every build/publish, not just live
+      in the repo.
+    -->
+    <Content Include="..\..\Drivers\**\*.*">
+      <Link>Drivers\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

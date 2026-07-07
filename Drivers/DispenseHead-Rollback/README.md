@@ -14,3 +14,12 @@ correct version):
 The app calls `pnputil /add-driver DispenseHead-Rollback\*.inf /install` against
 this package during the rollback step, so all files the .inf references need to
 sit alongside it in this folder.
+
+**Currently only `plser64_1.sys` is here — still missing the `.inf` (and
+usually a `.cat`).** `pnputil` can't stage a driver from a bare `.sys`; it needs
+the `.inf` to know the hardware ID, service name, and which files belong to the
+package. Pull the matching `.inf`/`.cat` from the same driver release this
+`.sys` came from (e.g. `C:\Windows\System32\DriverStore\FileRepository\` on a
+machine already running this known-good version — the folder name usually
+starts `prolific.inf_amd64_...` and contains all three files) and drop them in
+here next to the `.sys`.
