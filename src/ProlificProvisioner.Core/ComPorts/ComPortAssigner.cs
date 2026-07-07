@@ -8,18 +8,18 @@ public sealed record ComAssignmentResult(bool Success, string Detail);
 
 /// <summary>
 /// Forces a specific COM port number onto a device instance: writes the device's
-/// PortName registry value, reserves the number in the ComDB bitmap, and
-/// re-enumerates the device so the change takes effect. Refuses to proceed if
+/// PortName registry value, reserves the number in the ComDB bitmap, and cycles the
+/// device (disable/enable) so it re-reads the new port name. Refuses to proceed if
 /// another currently-connected device already legitimately holds that port.
 /// </summary>
 public sealed class ComPortAssigner
 {
-    private readonly DriverInstaller _driverInstaller;
+    private readonly IDriverBinder _driverBinder;
     private readonly IComDb _comDb;
 
-    public ComPortAssigner(DriverInstaller driverInstaller, IComDb? comDb = null)
+    public ComPortAssigner(IDriverBinder driverBinder, IComDb? comDb = null)
     {
-        _driverInstaller = driverInstaller;
+        _driverBinder = driverBinder;
 #pragma warning disable CA1416 // RealComDb is only ever exercised at runtime on Windows, by design; tests inject a fake IComDb instead.
         _comDb = comDb ?? new RealComDb();
 #pragma warning restore CA1416
@@ -54,10 +54,13 @@ public sealed class ComPortAssigner
             return new ComAssignmentResult(false, $"Failed to write COM port assignment: {ex.Message}");
         }
 
-        var restart = _driverInstaller.RestartDevice(deviceInstanceId);
-        if (!restart.Succeeded)
+        try
         {
-            return new ComAssignmentResult(false, $"Port assigned but device restart failed: {restart.StandardError.Trim()}");
+            _driverBinder.CyclePower(deviceInstanceId);
+        }
+        catch (Exception ex)
+        {
+            return new ComAssignmentResult(false, $"Port assigned but device didn't re-enumerate: {ex.Message}");
         }
 
         return new ComAssignmentResult(true, $"Assigned {targetPortName}.");

@@ -36,7 +36,7 @@ public class PortSlotControllerTests : IDisposable
         return path;
     }
 
-    private (PortSlotController Controller, FakeProcessRunner ProcessRunner, FakeComDb ComDb) BuildController(
+    private (PortSlotController Controller, FakeDriverBinder DriverBinder, FakeComDb ComDb) BuildController(
         PortRole role, AppConfig? config = null)
     {
         config ??= new AppConfig
@@ -47,15 +47,14 @@ public class PortSlotControllerTests : IDisposable
             DriverStepTimeout = TimeSpan.FromSeconds(5),
         };
 
-        var processRunner = new FakeProcessRunner();
+        var driverBinder = new FakeDriverBinder();
         var comDb = new FakeComDb();
-        var driverInstaller = new DriverInstaller(processRunner, TimeSpan.FromSeconds(5));
-        var rollbackService = new DriverRollbackService(driverInstaller);
-        var comPortAssigner = new ComPortAssigner(driverInstaller, comDb);
+        var rollbackService = new DriverRollbackService(driverBinder);
+        var comPortAssigner = new ComPortAssigner(driverBinder, comDb);
         var log = new ProvisioningLog(_logPath);
 
         var controller = new PortSlotController(role, config, rollbackService, comPortAssigner, log, () => Array.Empty<UsbSerialDevice>());
-        return (controller, processRunner, comDb);
+        return (controller, driverBinder, comDb);
     }
 
     private static async Task<ProvisioningStatus> WaitForTerminalStatus(PortSlotController controller, TimeSpan? timeout = null)
@@ -77,7 +76,7 @@ public class PortSlotControllerTests : IDisposable
     [Fact]
     public async Task DispenseHead_HappyPath_GoesThroughRollbackAndSucceeds()
     {
-        var (controller, processRunner, comDb) = BuildController(PortRole.DispenseHead);
+        var (controller, driverBinder, comDb) = BuildController(PortRole.DispenseHead);
         var device = new UsbSerialDevice("USB\\VID_067B&PID_2303\\1", "USB\\VID_067B&PID_2303", "Port_#0001.Hub_#0001", null);
 
         controller.OnDeviceArrived(device);
@@ -86,14 +85,16 @@ public class PortSlotControllerTests : IDisposable
         Assert.True(status.IsSuccess);
         Assert.Contains(comDb.ReservedPorts, p => p == 1);
         Assert.Equal("COM1", comDb.PortNamesByDevice[device.DeviceInstanceId]);
-        Assert.Contains(processRunner.Calls, c => c.Arguments.Contains("/scan-devices"));
-        Assert.Contains(processRunner.Calls, c => c.Arguments.Contains("/add-driver"));
+        // Latest driver installed first, then rolled back to known-good — both scoped to this exact device.
+        Assert.Equal(2, driverBinder.ForceInstallCalls.Count);
+        Assert.All(driverBinder.ForceInstallCalls, c => Assert.Equal(device.DeviceInstanceId, c.DeviceInstanceId));
+        Assert.Contains(device.DeviceInstanceId, driverBinder.CyclePowerCalls);
     }
 
     [Fact]
     public async Task Printer_HappyPath_SkipsRollbackAndSucceeds()
     {
-        var (controller, processRunner, comDb) = BuildController(PortRole.Printer);
+        var (controller, driverBinder, comDb) = BuildController(PortRole.Printer);
         var device = new UsbSerialDevice("USB\\VID_067B&PID_2304\\1", "USB\\VID_067B&PID_2304", "Port_#0002.Hub_#0001", null);
 
         controller.OnDeviceArrived(device);
@@ -101,6 +102,8 @@ public class PortSlotControllerTests : IDisposable
 
         Assert.True(status.IsSuccess);
         Assert.Equal("COM2", comDb.PortNamesByDevice[device.DeviceInstanceId]);
+        // Only the single "install latest" step — no rollback for the printer.
+        Assert.Single(driverBinder.ForceInstallCalls);
     }
 
     [Fact]
@@ -113,7 +116,7 @@ public class PortSlotControllerTests : IDisposable
             MaxAutoRetries = 2,
             DriverStepTimeout = TimeSpan.FromSeconds(5),
         };
-        var (controller, processRunner, comDb) = BuildController(PortRole.Printer, config);
+        var (controller, _, comDb) = BuildController(PortRole.Printer, config);
         comDb.ThrowOnWrite = true; // simulates a registry write failure, e.g. non-elevated process
         var device = new UsbSerialDevice("USB\\VID_067B&PID_2304\\1", "USB\\VID_067B&PID_2304", "Port_#0002.Hub_#0001", null);
 
@@ -185,15 +188,59 @@ public class PortSlotControllerTests : IDisposable
             MaxAutoRetries = 1,
             DriverStepTimeout = TimeSpan.FromSeconds(30),
         };
-        var (controller, processRunner, _) = BuildController(PortRole.Printer, config);
-        // Make the driver install step hang effectively forever from the runner's perspective
-        // by having it succeed only after we've asserted the in-progress state; simpler here:
-        // just assert removal works from the DeviceDetected state before any async work lands.
+        var (controller, _, _) = BuildController(PortRole.Printer, config);
         var device = new UsbSerialDevice("USB\\VID_067B&PID_2304\\1", "USB\\VID_067B&PID_2304", "Port_#0002.Hub_#0001", null);
 
         controller.OnDeviceArrived(device);
         controller.OnDeviceRemoved(device);
 
         Assert.Equal(ProvisioningStep.WaitingForCable, controller.Status.Step);
+    }
+
+    [Fact]
+    public async Task OnDeviceArrived_CalledRepeatedlyForSameDeviceAfterSuccess_DoesNotReRunSequence()
+    {
+        // Regression test: ProvisioningCoordinator.ReconcileCurrentDevices calls
+        // OnDeviceArrived for every still-connected resolvable device on every poll
+        // tick (~1/sec), not just on a genuine physical arrival. A device sitting in
+        // Success awaiting "Confirm Labeled" must not get re-provisioned every second.
+        var (controller, driverBinder, _) = BuildController(PortRole.Printer);
+        var device = new UsbSerialDevice("USB\\VID_067B&PID_2304\\1", "USB\\VID_067B&PID_2304", "Port_#0002.Hub_#0001", null);
+
+        controller.OnDeviceArrived(device);
+        await WaitForTerminalStatus(controller);
+        Assert.True(controller.Status.IsSuccess);
+        var callsAfterFirstRun = driverBinder.ForceInstallCalls.Count;
+
+        controller.OnDeviceArrived(device);
+        controller.OnDeviceArrived(device);
+
+        Assert.Equal(callsAfterFirstRun, driverBinder.ForceInstallCalls.Count);
+        Assert.True(controller.Status.IsSuccess);
+    }
+
+    [Fact]
+    public async Task OnDeviceArrived_CalledRepeatedlyWhileCableFault_DoesNotAutoRetry()
+    {
+        var config = new AppConfig
+        {
+            DispenseHeadRollbackDriverInfPath = CreateTempInf(),
+            PrinterLatestDriverInfPath = CreateTempInf(),
+            MaxAutoRetries = 1,
+            DriverStepTimeout = TimeSpan.FromSeconds(5),
+        };
+        var (controller, driverBinder, comDb) = BuildController(PortRole.Printer, config);
+        comDb.ThrowOnWrite = true;
+        var device = new UsbSerialDevice("USB\\VID_067B&PID_2304\\1", "USB\\VID_067B&PID_2304", "Port_#0002.Hub_#0001", null);
+
+        controller.OnDeviceArrived(device);
+        await WaitForTerminalStatus(controller);
+        Assert.True(controller.Status.IsTerminalFailure);
+        var callsAfterFault = driverBinder.ForceInstallCalls.Count;
+
+        controller.OnDeviceArrived(device);
+
+        Assert.Equal(callsAfterFault, driverBinder.ForceInstallCalls.Count);
+        Assert.True(controller.Status.IsTerminalFailure);
     }
 }

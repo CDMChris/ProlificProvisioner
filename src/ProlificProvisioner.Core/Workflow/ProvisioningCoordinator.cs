@@ -42,6 +42,7 @@ public sealed class ProvisioningCoordinator : IDisposable
         };
 
         _watcher.DeviceChanged += OnDeviceChanged;
+        _watcher.Polled += (_, devices) => ReconcileCurrentDevices(devices);
     }
 
     public PortRoleResolver RoleResolver => _roleResolver;
@@ -72,6 +73,28 @@ public sealed class ProvisioningCoordinator : IDisposable
         else
         {
             slot.OnDeviceRemoved(e.Device);
+        }
+    }
+
+    /// <summary>
+    /// Re-checks every currently-connected device against the role map. Covers the
+    /// case a device was already plugged in (and physically never re-arrives) when its
+    /// fixture port gets Learned — <see cref="OnDeviceChanged"/> alone would never
+    /// revisit it, since nothing about its connection state changes at that moment.
+    /// Safe to call every poll tick: <see cref="PortSlotController.OnDeviceArrived"/>
+    /// is a no-op for a device it's already tracking.
+    /// </summary>
+    public void ReconcileCurrentDevices() => ReconcileCurrentDevices(_enumerator.EnumerateProlificDevices());
+
+    private void ReconcileCurrentDevices(IReadOnlyList<UsbSerialDevice> currentDevices)
+    {
+        foreach (var device in currentDevices)
+        {
+            var role = _roleResolver.Resolve(device.LocationPath);
+            if (role is not null)
+            {
+                Slots[role.Value].OnDeviceArrived(device);
+            }
         }
     }
 

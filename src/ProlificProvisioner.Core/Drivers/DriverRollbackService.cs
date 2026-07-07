@@ -3,75 +3,51 @@ namespace ProlificProvisioner.Core.Drivers;
 public sealed record DriverStepResult(bool Success, string Detail);
 
 /// <summary>
-/// Reproduces the outcome of "install latest driver, then Roll Back Driver" for the
-/// dispense-head port. Windows has no supported API/CLI for the literal Roll Back
-/// Driver button (it's an internal Device Manager action), so this instead:
-///   1. Installs the latest driver package (matches the manual "download latest" step).
-///   2. Removes that driver package for the device.
-///   3. Force-installs the bundled known-good older INF against the device's hardware ID.
-/// The end state matches what the tech gets today by clicking Roll Back, but it's
-/// deterministic and scriptable instead of depending on Device Manager's rollback history.
+/// Drives the driver side of provisioning for both fixture slots via
+/// <see cref="IDriverBinder"/>, which forces a specific bundled .inf onto exactly one
+/// device instance — matching the operator's manual "Update Driver → pick a specific
+/// model → Next" flow in Device Manager.
+///
+/// For the dispense-head port, "download latest, then Roll Back Driver" is reproduced
+/// deterministically rather than literally: Windows has no supported API for the
+/// literal Roll Back Driver button (it's an internal, undocumented Device Manager
+/// action, and its outcome depends on whatever happened to be installed before — not
+/// reproducible on demand). Instead this force-installs the bundled "latest" package
+/// first, then force-installs the bundled known-good package — landing on the same
+/// known-good end state every time, regardless of the device's install history.
 /// </summary>
 public sealed class DriverRollbackService
 {
-    private readonly DriverInstaller _installer;
+    private readonly IDriverBinder _binder;
 
-    public DriverRollbackService(DriverInstaller installer)
+    public DriverRollbackService(IDriverBinder binder)
     {
-        _installer = installer;
+        _binder = binder;
     }
 
-    /// <summary>
-    /// For the dispense-head port: "latest driver" means whatever Windows Update currently
-    /// offers, which changes over time — there's no fixed file to bundle for this step.
-    /// Triggers Windows' online driver search against the device (pnputil /scan-devices),
-    /// mirroring the manual "download latest driver" step. Its result is superseded by
-    /// <see cref="RollBackToKnownGood"/> immediately after, so a failure here (e.g. no
-    /// network) is non-fatal — logged, but the rollback step still proceeds.
-    /// </summary>
-    public DriverStepResult InstallLatestViaWindowsUpdate(string deviceInstanceId)
+    public DriverStepResult InstallLatest(string deviceInstanceId, string latestInfPath)
     {
-        var result = _installer.ForceInstallForDevice(deviceInstanceId);
-        return result.Succeeded
-            ? new DriverStepResult(true, "Latest driver installed via Windows Update.")
-            : new DriverStepResult(false, $"Windows Update driver search failed (non-fatal, continuing to rollback): {result.StandardError.Trim()}");
+        try
+        {
+            _binder.ForceInstall(deviceInstanceId, latestInfPath);
+            return new DriverStepResult(true, "Latest driver installed.");
+        }
+        catch (Exception ex)
+        {
+            return new DriverStepResult(false, $"Failed to install latest driver: {ex.Message}");
+        }
     }
 
-    /// <summary>For the printer port: a fixed, bundled driver package (the 2026 release) is always used — install it directly.</summary>
-    public DriverStepResult InstallBundledDriver(string infPath)
+    public DriverStepResult RollBackToKnownGood(string deviceInstanceId, string knownGoodInfPath)
     {
-        var result = _installer.InstallDriverPackage(infPath);
-        return result.Succeeded
-            ? new DriverStepResult(true, "Driver installed.")
-            : new DriverStepResult(false, $"Failed to install driver: {result.StandardError.Trim()}");
-    }
-
-    /// <summary>Executes steps 2 and 3 above for the dispense-head device.</summary>
-    public DriverStepResult RollBackToKnownGood(string deviceInstanceId, string hardwareId, string knownGoodInfPath)
-    {
-        var installed = _installer.EnumerateDriversForHardwareId(hardwareId);
-        foreach (var driver in installed)
+        try
         {
-            var deleteResult = _installer.DeleteDriverPackage(driver.PublishedName, force: true);
-            if (!deleteResult.Succeeded)
-            {
-                return new DriverStepResult(false,
-                    $"Failed to remove driver package {driver.PublishedName}: {deleteResult.StandardError.Trim()}");
-            }
+            _binder.ForceInstall(deviceInstanceId, knownGoodInfPath);
+            return new DriverStepResult(true, "Rolled back to known-good driver.");
         }
-
-        var installResult = _installer.InstallDriverPackage(knownGoodInfPath);
-        if (!installResult.Succeeded)
+        catch (Exception ex)
         {
-            return new DriverStepResult(false, $"Failed to install known-good driver: {installResult.StandardError.Trim()}");
+            return new DriverStepResult(false, $"Failed to roll back to known-good driver: {ex.Message}");
         }
-
-        var restartResult = _installer.RestartDevice(deviceInstanceId);
-        if (!restartResult.Succeeded)
-        {
-            return new DriverStepResult(false, $"Driver installed but device restart failed: {restartResult.StandardError.Trim()}");
-        }
-
-        return new DriverStepResult(true, "Rolled back to known-good driver.");
     }
 }

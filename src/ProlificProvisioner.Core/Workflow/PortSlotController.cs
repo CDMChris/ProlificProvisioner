@@ -43,8 +43,22 @@ public sealed class PortSlotController
         _getCurrentDevices = getCurrentDevices;
     }
 
+    /// <summary>
+    /// Starts (or, if called again for the same device, is a no-op against) this
+    /// slot's provisioning sequence. Called both on genuine physical arrival and, from
+    /// <see cref="ProvisioningCoordinator.ReconcileCurrentDevices()"/>, repeatedly for
+    /// every still-connected resolvable device on every poll tick — so the same-device
+    /// guard below is load-bearing, not just an optimization: without it, a device
+    /// sitting in Success (awaiting "Confirm Labeled") or CableFault (awaiting
+    /// Retry/Mark Defective) would get its whole sequence silently re-run every second.
+    /// </summary>
     public void OnDeviceArrived(UsbSerialDevice device)
     {
+        if (_activeDevice?.DeviceInstanceId == device.DeviceInstanceId)
+        {
+            return;
+        }
+
         if (Status.IsInProgress)
         {
             return;
@@ -120,14 +134,25 @@ public sealed class PortSlotController
 
         var outcome = await ExecuteSequence(device, attempt);
 
+        // This runs fire-and-forget (nobody awaits RunProvisioningAsync's Task), so if
+        // anything below threw uncaught, the status would freeze at whatever the last
+        // in-progress step was — forever, since nothing would ever observe the fault.
+        // Logging failures specifically must never block a real success/fault from
+        // reaching the UI.
+        try
+        {
+            LogOutcome(device, outcome);
+        }
+        catch
+        {
+            // Best-effort audit trail; losing a log line must not lose the status update below.
+        }
+
         if (outcome.Success)
         {
-            _log.Append(new ProvisioningEvent(DateTimeOffset.Now, Role, device.DeviceInstanceId, ProvisioningStep.Success, true));
             SetStatus(Status with { Step = ProvisioningStep.Success, FailureReason = null, AttemptCount = attempt });
             return;
         }
-
-        _log.Append(new ProvisioningEvent(DateTimeOffset.Now, Role, device.DeviceInstanceId, outcome.FailedAtStep, false, outcome.FailureReason));
 
         if (attempt < _config.MaxAutoRetries)
         {
@@ -137,6 +162,18 @@ public sealed class PortSlotController
         }
 
         SetStatus(Status with { Step = ProvisioningStep.CableFault, FailureReason = outcome.FailureReason, AttemptCount = attempt });
+    }
+
+    private void LogOutcome(UsbSerialDevice device, SequenceOutcome outcome)
+    {
+        if (outcome.Success)
+        {
+            _log.Append(new ProvisioningEvent(DateTimeOffset.Now, Role, device.DeviceInstanceId, ProvisioningStep.Success, true));
+        }
+        else
+        {
+            _log.Append(new ProvisioningEvent(DateTimeOffset.Now, Role, device.DeviceInstanceId, outcome.FailedAtStep, false, outcome.FailureReason));
+        }
     }
 
     private sealed record SequenceOutcome(bool Success, ProvisioningStep FailedAtStep, string? FailureReason);
@@ -149,14 +186,10 @@ public sealed class PortSlotController
 
             SetStatus(Status with { Step = ProvisioningStep.InstallingLatestDriver, AttemptCount = attempt });
             var installResult = await RunStepWithTimeout(
-                () => Role.RequiresDriverRollback()
-                    ? _rollbackService.InstallLatestViaWindowsUpdate(device.DeviceInstanceId)
-                    : _rollbackService.InstallBundledDriver(_config.PrinterLatestDriverInfPath),
+                () => _rollbackService.InstallLatest(device.DeviceInstanceId, _config.PrinterLatestDriverInfPath),
                 cts.Token);
 
-            // For the dispense-head port, a failure here is expected to be superseded by
-            // rollback and isn't fatal; for the printer it's the only driver step, so it must succeed.
-            if (!installResult.Success && !Role.RequiresDriverRollback())
+            if (!installResult.Success)
             {
                 return new SequenceOutcome(false, ProvisioningStep.InstallingLatestDriver, installResult.Detail);
             }
@@ -165,7 +198,7 @@ public sealed class PortSlotController
             {
                 SetStatus(Status with { Step = ProvisioningStep.RollingBackDriver, AttemptCount = attempt });
                 var rollbackResult = await RunStepWithTimeout(
-                    () => _rollbackService.RollBackToKnownGood(device.DeviceInstanceId, device.HardwareId, _config.DispenseHeadRollbackDriverInfPath),
+                    () => _rollbackService.RollBackToKnownGood(device.DeviceInstanceId, _config.DispenseHeadRollbackDriverInfPath),
                     cts.Token);
 
                 if (!rollbackResult.Success)

@@ -10,6 +10,12 @@ public sealed class AppConfig
 
     public string DispenseHeadRollbackDriverInfPath { get; set; } = "Drivers/DispenseHead-Rollback/plser_1.inf";
 
+    /// <summary>
+    /// The current/newest driver package. Used directly for the printer's only driver
+    /// step, and as the dispense head's "install latest" step before it rolls back to
+    /// <see cref="DispenseHeadRollbackDriverInfPath"/> — there's only one "latest"
+    /// Prolific driver, regardless of which port ends up using it long-term.
+    /// </summary>
     public string PrinterLatestDriverInfPath { get; set; } = "Drivers/Printer-2026/plser_1.inf";
 
     public TimeSpan DeviceDetectTimeout { get; set; } = TimeSpan.FromSeconds(30);
